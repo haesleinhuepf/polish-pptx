@@ -18,7 +18,10 @@ For using this tool, you need an [Anthropic Claude API key](https://platform.cla
 
 ```
 pip install polish-pptx
-export ANTHROPIC_API_KEY=...
+```
+
+## Usage
+```
 polish-pptx deck.pptx --slides 4,5     # writes deck.pptx.polished.pptx
 ```
 
