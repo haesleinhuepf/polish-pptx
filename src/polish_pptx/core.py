@@ -97,16 +97,59 @@ def svg_to_png_bytes(svg, width_px=1920):
     return cairosvg.svg2png(bytestring=svg.encode("utf-8"), output_width=width_px)
 
 
+def content_bbox(img):
+    """Bounding box of ``img`` without empty border pixels: transparent ones, or, for an
+    opaque image, those having the color of the top-left corner."""
+    from PIL import Image, ImageChops
+
+    img = img.convert("RGBA")
+    bbox = img.getchannel("A").getbbox()
+    if bbox == (0, 0, *img.size):
+        bg = Image.new("RGBA", img.size, img.getpixel((0, 0)))
+        bbox = ImageChops.difference(img, bg).convert("RGB").getbbox()
+    return bbox or (0, 0, *img.size)
+
+
+def is_title(shape):
+    return shape.is_placeholder and "title" in str(shape.placeholder_format.type).lower()
+
+
+def main_text_shape(slide):
+    """The non-title placeholder or text box holding the most text, or None."""
+    candidates = [
+        s for s in slide.shapes
+        if s.has_text_frame and s.text_frame.text.strip() and not is_title(s)
+        and (s.is_placeholder or s.shape_type == MSO_SHAPE_TYPE.TEXT_BOX)
+    ]
+    return max(candidates, key=lambda s: len(s.text_frame.text), default=None)
+
+
+def clear_slide(slide):
+    """Remove all shapes except the title and the main text shape."""
+    keep = [s._element for s in (slide.shapes.title, main_text_shape(slide)) if s is not None]
+    for shape in list(slide.shapes):
+        if not any(shape._element is e for e in keep):
+            shape._element.getparent().remove(shape._element)
+
+
 def add_png_to_slide(prs, slide, png_bytes):
-    """Add the PNG to the slide, fitted and centered within the slide."""
+    """Add the PNG to the slide, cropped to its content. The content is placed where it
+    would be if the uncropped PNG was fitted and centered within the slide."""
     from PIL import Image
 
-    w, h = Image.open(io.BytesIO(png_bytes)).size
+    img = Image.open(io.BytesIO(png_bytes))
+    w, h = img.size
     scale = min(prs.slide_width / w, prs.slide_height / h)
-    pw, ph = int(w * scale), int(h * scale)
-    left = (prs.slide_width - pw) // 2
-    top = (prs.slide_height - ph) // 2
-    return slide.shapes.add_picture(io.BytesIO(png_bytes), left, top, pw, ph)
+    offset_x = (prs.slide_width - w * scale) / 2
+    offset_y = (prs.slide_height - h * scale) / 2
+    x0, y0, x1, y1 = content_bbox(img)
+    buf = io.BytesIO()
+    img.crop((x0, y0, x1, y1)).save(buf, format="PNG")
+    buf.seek(0)
+    return slide.shapes.add_picture(
+        buf, int(offset_x + x0 * scale), int(offset_y + y0 * scale),
+        int((x1 - x0) * scale), int((y1 - y0) * scale),
+    )
 
 
 def polish_presentation(prs, client, images=None, model=DEFAULT_MODEL, min_shapes=3, slides=None,
@@ -133,6 +176,7 @@ def polish_presentation(prs, client, images=None, model=DEFAULT_MODEL, min_shape
         try:
             svg = request_svg(client, images[i], model, history)
             png = svg_to_png_bytes(svg)
+            clear_slide(slide)
             add_png_to_slide(prs, slide, png)
             done += 1
         except Exception as e:  # keep going with other slides

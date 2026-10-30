@@ -6,7 +6,9 @@ from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.util import Inches
 
-from polish_pptx.core import CONSISTENCY_PROMPT, count_diagram_shapes, extract_svg, polish_presentation
+from polish_pptx.core import (CONSISTENCY_PROMPT, add_png_to_slide, clear_slide, content_bbox,
+                              count_diagram_shapes,
+                              extract_svg, polish_presentation)
 
 SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"><rect width="90" height="40" fill="red"/></svg>'
 
@@ -39,7 +41,7 @@ def test_polish():
     client = SimpleNamespace(messages=Msgs())
     imgs = [Image.new("RGB", (100, 50))] * 2
     assert polish_presentation(prs, client, images=imgs, log=lambda m: None) == 1
-    assert len(prs.slides[0].shapes) == 4
+    assert len(prs.slides[0].shapes) == 1  # diagram shapes replaced by the picture
     assert len(prs.slides[1].shapes) == 1
 
 
@@ -54,7 +56,7 @@ def test_polish_selected_slides():
     imgs = [Image.new("RGB", (100, 50))] * 2
     assert polish_presentation(prs, client, images=imgs, slides=[2], log=lambda m: None) == 1
     assert len(prs.slides[0].shapes) == 3
-    assert len(prs.slides[1].shapes) == 2
+    assert len(prs.slides[1].shapes) == 1  # empty text box removed
 
 
 def test_polish_sends_earlier_slides_as_examples():
@@ -92,3 +94,35 @@ def test_request_svg_limits_examples():
         request_svg(client, Image.new("RGB", (100, 50)), history=history)
     assert len(history) == MAX_EXAMPLES + 2
     assert len(calls[-1]) == 2 * MAX_EXAMPLES + 1
+
+
+def test_clear_slide_keeps_title_and_main_text():
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[1])  # title and content
+    slide.shapes.title.text = "Headline"
+    slide.placeholders[1].text = "Main text with several words"
+    slide.shapes.add_textbox(0, 0, Inches(1), Inches(1)).text = "label"
+    slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, Inches(1), Inches(1)).text = "a much longer box label"
+    clear_slide(slide)
+    assert [s.text_frame.text for s in slide.shapes] == ["Headline", "Main text with several words"]
+
+
+def test_content_bbox():
+    img = Image.new("RGBA", (100, 50), (0, 0, 0, 0))
+    img.paste((255, 0, 0, 255), (10, 5, 30, 25))
+    assert content_bbox(img) == (10, 5, 30, 25)
+    img = Image.new("RGB", (100, 50), "white")
+    img.paste((255, 0, 0), (10, 5, 30, 25))
+    assert content_bbox(img) == (10, 5, 30, 25)
+
+
+def test_add_png_keeps_content_position():
+    prs = Presentation()
+    prs.slide_width, prs.slide_height = 2000000, 2000000  # PNG of 100x50 is scaled by 20000, top offset 500000
+    img = Image.new("RGBA", (100, 50), (0, 0, 0, 0))
+    img.paste((255, 0, 0, 255), (10, 5, 30, 25))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    pic = add_png_to_slide(prs, prs.slides.add_slide(prs.slide_layouts[6]), buf.getvalue())
+    assert (pic.left, pic.top, pic.width, pic.height) == (200000, 600000, 400000, 400000)
+    assert Image.open(io.BytesIO(pic.image.blob)).size == (20, 20)
