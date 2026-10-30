@@ -3,6 +3,8 @@
 CLI tool that polishes pptx slides containing multiple arrows, boxes, circles etc.
 Each such slide is rendered (`render-pptx`), sent to Claude, which returns a polished
 SVG of the figure; the SVG is rasterized to PNG and added to the slide.
+The 3 most recently polished slides of a run are sent along as few-shot examples, so similar
+slides get the same style and icons.
 
 ```
 pip install .
@@ -10,4 +12,5 @@ export ANTHROPIC_API_KEY=...
 polish-pptx deck.pptx      # writes deck.pptx.polished.pptx
 ```
 
-Options: `--model` (default `claude-sonnet-5`), `--min-shapes` (default 3).
+Options: `--model` (default `claude-sonnet-5`), `--min-shapes` (default 3),
+`--slides` (comma-separated slide numbers to polish, e.g. `--slides 1,3,5`; overrides `--min-shapes`).

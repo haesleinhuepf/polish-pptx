@@ -3,14 +3,24 @@ import re
 
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
-DEFAULT_MODEL = "claude-sonnet-5"
+DEFAULT_MODEL = "claude-sonnet-5-5"
+MAX_EXAMPLES = 3  # most recent polished slides sent as few-shot examples
 
 PROMPT = (
     "This is a screenshot of a presentation slide. Polish the figure on it: focus on the "
     "arrows, boxes, circles and similar diagram shapes (and their labels) and redraw them "
     "cleanly and consistently aligned. Ignore the headline/title text and layout logos. "
+    "Make this figure look nice! Modify the colors, line styles and layout to fit to the slide-layout. "
+    "Add icons and make it easily digestible. "
     "Return only the polished figure as a single SVG document (no explanation, no markdown), "
     "with a viewBox of the same aspect ratio as the screenshot and a transparent background."
+)
+
+CONSISTENCY_PROMPT = (
+    " The earlier slides of this presentation were already polished in this conversation. "
+    "Keep the result visually consistent with them: reuse the same color palette, fonts, line "
+    "styles, box shapes and arrow heads, and if this slide shows the same or similar concepts "
+    "as an earlier slide, use the very same icons and visual representation for them."
 )
 
 
@@ -44,29 +54,41 @@ def extract_svg(text):
     return m.group(0)
 
 
-def request_svg(client, image, model=DEFAULT_MODEL):
-    response = client.messages.create(
-        model=model,
-        max_tokens=16000,
-        messages=[
+def slide_message(image, text):
+    return {
+        "role": "user",
+        "content": [
             {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/png",
-                            "data": image_to_base64_png(image),
-                        },
-                    },
-                    {"type": "text", "text": PROMPT},
-                ],
-            }
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": image_to_base64_png(image),
+                },
+            },
+            {"type": "text", "text": text},
         ],
-    )
+    }
+
+
+def request_svg(client, image, model=DEFAULT_MODEL, history=None):
+    """Request a polished SVG for ``image``. ``history`` is a list of earlier
+    (user message, svg) pairs; the last ``MAX_EXAMPLES`` are sent as few-shot examples
+    so that similar slides get the same style and icons. On success the new pair is
+    appended to it."""
+    if history is None:
+        history = []
+    messages = []
+    for user, svg in history[-MAX_EXAMPLES:]:
+        messages.append(user)
+        messages.append({"role": "assistant", "content": [{"type": "text", "text": svg}]})
+    user = slide_message(image, PROMPT + (CONSISTENCY_PROMPT if history else ""))
+    messages.append(user)
+    response = client.messages.create(model=model, max_tokens=16000, messages=messages)
     text = "".join(b.text for b in response.content if getattr(b, "type", "") == "text")
-    return extract_svg(text)
+    svg = extract_svg(text)
+    history.append((user, svg))
+    return svg
 
 
 def svg_to_png_bytes(svg, width_px=1920):
@@ -87,11 +109,16 @@ def add_png_to_slide(prs, slide, png_bytes):
     return slide.shapes.add_picture(io.BytesIO(png_bytes), left, top, pw, ph)
 
 
-def polish_presentation(prs, client, images=None, model=DEFAULT_MODEL, min_shapes=3, log=print):
-    """Polish all slides having at least ``min_shapes`` diagram shapes. Returns polished count."""
-    targets = [
-        i for i, s in enumerate(prs.slides) if count_diagram_shapes(s) >= min_shapes
-    ]
+def polish_presentation(prs, client, images=None, model=DEFAULT_MODEL, min_shapes=3, slides=None,
+                        log=print):
+    """Polish all slides having at least ``min_shapes`` diagram shapes, or, if ``slides``
+    (1-based slide numbers) is given, exactly those slides. Returns polished count."""
+    if slides is not None:
+        targets = sorted({n - 1 for n in slides if 1 <= n <= len(prs.slides)})
+    else:
+        targets = [
+            i for i, s in enumerate(prs.slides) if count_diagram_shapes(s) >= min_shapes
+        ]
     if not targets:
         return 0
     if images is None:
@@ -99,11 +126,12 @@ def polish_presentation(prs, client, images=None, model=DEFAULT_MODEL, min_shape
 
         images = render_slides(prs)
     done = 0
+    history = []  # earlier polished slides, sent as few-shot examples for consistency
     for i in targets:
         slide = prs.slides[i]
         log(f"Polishing slide {i + 1}")
         try:
-            svg = request_svg(client, images[i], model)
+            svg = request_svg(client, images[i], model, history)
             png = svg_to_png_bytes(svg)
             add_png_to_slide(prs, slide, png)
             done += 1
