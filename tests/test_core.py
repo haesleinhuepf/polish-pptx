@@ -1,14 +1,12 @@
-import io
 from types import SimpleNamespace
 
 from PIL import Image
 from pptx import Presentation
-from pptx.enum.shapes import MSO_SHAPE
+from pptx.enum.shapes import MSO_SHAPE, MSO_SHAPE_TYPE
 from pptx.util import Inches
 
-from polish_pptx.core import (CONSISTENCY_PROMPT, add_png_to_slide, content_bbox,
-                              count_diagram_shapes,
-                              extract_svg, move_shapes_off_slide, polish_presentation)
+from polish_pptx.core import (CONSISTENCY_PROMPT, count_diagram_shapes, extract_svg,
+                              move_shapes_off_slide, polish_presentation)
 
 SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"><rect width="90" height="40" fill="red"/></svg>'
 
@@ -45,7 +43,8 @@ def test_polish():
     client = SimpleNamespace(messages=Msgs())
     imgs = [Image.new("RGB", (100, 50))] * 2
     assert polish_presentation(prs, client, images=imgs, log=lambda m: None) == 1
-    assert len(visible_shapes(prs, prs.slides[0])) == 1  # diagram shapes replaced by the picture
+    assert len(visible_shapes(prs, prs.slides[0])) == 1  # diagram shapes replaced by the figure group
+    assert visible_shapes(prs, prs.slides[0])[0].shape_type == MSO_SHAPE_TYPE.GROUP
     assert len(prs.slides[0].shapes) == 4  # diagram shapes kept below the slide
     assert len(prs.slides[1].shapes) == 1
 
@@ -113,24 +112,3 @@ def test_move_shapes_off_slide_keeps_title_and_main_text():
     move_shapes_off_slide(slide, prs.slide_height)
     assert [s.text_frame.text for s in visible_shapes(prs, slide)] == ["Headline", "Main text with several words"]
     assert [s.top for s in slide.shapes] == tops[:2] + [t + prs.slide_height for t in tops[2:]]
-
-
-def test_content_bbox():
-    img = Image.new("RGBA", (100, 50), (0, 0, 0, 0))
-    img.paste((255, 0, 0, 255), (10, 5, 30, 25))
-    assert content_bbox(img) == (10, 5, 30, 25)
-    img = Image.new("RGB", (100, 50), "white")
-    img.paste((255, 0, 0), (10, 5, 30, 25))
-    assert content_bbox(img) == (10, 5, 30, 25)
-
-
-def test_add_png_keeps_content_position():
-    prs = Presentation()
-    prs.slide_width, prs.slide_height = 2000000, 2000000  # PNG of 100x50 is scaled by 20000, top offset 500000
-    img = Image.new("RGBA", (100, 50), (0, 0, 0, 0))
-    img.paste((255, 0, 0, 255), (10, 5, 30, 25))
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    pic = add_png_to_slide(prs, prs.slides.add_slide(prs.slide_layouts[6]), buf.getvalue())
-    assert (pic.left, pic.top, pic.width, pic.height) == (200000, 600000, 400000, 400000)
-    assert Image.open(io.BytesIO(pic.image.blob)).size == (20, 20)
