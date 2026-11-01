@@ -3,6 +3,8 @@ import re
 
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
+from .svg2pptx import add_svg_to_slide
+
 DEFAULT_MODEL = "claude-sonnet-5-5"
 MAX_EXAMPLES = 3  # most recent polished slides sent as few-shot examples
 
@@ -13,7 +15,12 @@ PROMPT = (
     "Make this figure look nice! Modify the colors, line styles and layout to fit to the slide-layout. "
     "Add icons and make it easily digestible. "
     "Return only the polished figure as a single SVG document (no explanation, no markdown), "
-    "with a viewBox of the same aspect ratio as the screenshot and a transparent background."
+    "with a viewBox of the same aspect ratio as the screenshot and a transparent background. "
+    "The SVG will be converted into editable PowerPoint shapes, so only use g, rect, circle, "
+    "ellipse, line, polyline, polygon, path and text/tspan elements (styled with presentation "
+    "attributes, solid colors or simple linear gradients) and markers for arrow heads. Draw icons "
+    "with paths and simple shapes. Do not use images, filters, shadows, masks, clip paths, "
+    "patterns, foreignObject or embedded fonts. Write each line of a label as text or tspan."
 )
 
 CONSISTENCY_PROMPT = (
@@ -91,25 +98,6 @@ def request_svg(client, image, model=DEFAULT_MODEL, history=None):
     return svg
 
 
-def svg_to_png_bytes(svg, width_px=1920):
-    import cairosvg
-
-    return cairosvg.svg2png(bytestring=svg.encode("utf-8"), output_width=width_px)
-
-
-def content_bbox(img):
-    """Bounding box of ``img`` without empty border pixels: transparent ones, or, for an
-    opaque image, those having the color of the top-left corner."""
-    from PIL import Image, ImageChops
-
-    img = img.convert("RGBA")
-    bbox = img.getchannel("A").getbbox()
-    if bbox == (0, 0, *img.size):
-        bg = Image.new("RGBA", img.size, img.getpixel((0, 0)))
-        bbox = ImageChops.difference(img, bg).convert("RGB").getbbox()
-    return bbox or (0, 0, *img.size)
-
-
 def is_title(shape):
     return shape.is_placeholder and "title" in str(shape.placeholder_format.type).lower()
 
@@ -135,26 +123,6 @@ def move_shapes_off_slide(slide, slide_height):
             shape.left, shape.top, shape.width, shape.height = left, top + slide_height, width, height
 
 
-def add_png_to_slide(prs, slide, png_bytes):
-    """Add the PNG to the slide, cropped to its content. The content is placed where it
-    would be if the uncropped PNG was fitted and centered within the slide."""
-    from PIL import Image
-
-    img = Image.open(io.BytesIO(png_bytes))
-    w, h = img.size
-    scale = min(prs.slide_width / w, prs.slide_height / h)
-    offset_x = (prs.slide_width - w * scale) / 2
-    offset_y = (prs.slide_height - h * scale) / 2
-    x0, y0, x1, y1 = content_bbox(img)
-    buf = io.BytesIO()
-    img.crop((x0, y0, x1, y1)).save(buf, format="PNG")
-    buf.seek(0)
-    return slide.shapes.add_picture(
-        buf, int(offset_x + x0 * scale), int(offset_y + y0 * scale),
-        int((x1 - x0) * scale), int((y1 - y0) * scale),
-    )
-
-
 def polish_presentation(prs, client, images=None, model=DEFAULT_MODEL, min_shapes=3, slides=None,
                         log=print):
     """Polish all slides having at least ``min_shapes`` diagram shapes, or, if ``slides``
@@ -178,9 +146,8 @@ def polish_presentation(prs, client, images=None, model=DEFAULT_MODEL, min_shape
         log(f"Polishing slide {i + 1}")
         try:
             svg = request_svg(client, images[i], model, history)
-            png = svg_to_png_bytes(svg)
             move_shapes_off_slide(slide, prs.slide_height)
-            add_png_to_slide(prs, slide, png)
+            add_svg_to_slide(prs, slide, svg)
             done += 1
         except Exception as e:  # keep going with other slides
             log(f"  slide {i + 1} skipped: {e}")

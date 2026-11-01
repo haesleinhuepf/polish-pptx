@@ -5,8 +5,9 @@ CLI tool that polishes pptx slides containing multiple arrows, boxes, circles et
 ![](docs/images/polish-pptx.png)
 
 Each such slide is rendered (`render-pptx`), sent to Claude, which returns a polished
-SVG of the figure; the SVG is rasterized to PNG, cropped to its content and added to the slide (with the content at the
-same position and scale it had in the uncropped PNG, fitted and centered on the slide).
+SVG of the figure; the SVG is converted into native, editable PowerPoint shapes (boxes with or without rounded corners,
+circles, lines with arrow heads, freeforms with curves for paths and icons, text boxes) with their colors, gradients,
+line styles and fonts, and added to the slide as one group (with the SVG fitted and centered on the slide).
 All other shapes on that slide, except the headline and the main text shape, are moved down by one
 slide height, so they sit below the slide (not visible, but still available for editing).
 The 3 most recently polished slides of a run are sent along as few-shot examples, so similar

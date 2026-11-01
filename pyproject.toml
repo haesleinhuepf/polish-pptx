@@ -14,7 +14,6 @@ dependencies = [
     "python-pptx",
     "render-pptx",
     "anthropic",
-    "cairosvg",
     "pillow",
 ]
 
